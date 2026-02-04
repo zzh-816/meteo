@@ -42,4 +42,4 @@ vosk==0.3.44
 transformers>=4.30.0
 accelerate>=0.20.0
 dateparser==1.2.0
-cryptography==42.0.8
+cryptography==46.0.4
