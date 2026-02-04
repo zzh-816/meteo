@@ -6,6 +6,7 @@
 import sqlite3
 import os
 import sys
+import json
 import threading
 from datetime import datetime, timedelta
 from config.logger import setup_logging
@@ -44,21 +45,103 @@ def get_db_path():
 DB_PATH = get_db_path()
 
 # 气象要素中英文映射
-METEO_DICT = {
-    "TEMPA": {"name": "温度", "unit": "℃"},
-    "TEMPB": {"name": "温度B", "unit": "℃"},
-    "HUMIA": {"name": "湿度", "unit": "%"},
-    "PRESA": {"name": "气压", "unit": "hPa"},
-    "WSPDA": {"name": "风速", "unit": "m/s"},
-    "WDIRA": {"name": "风向", "unit": "°"},
-    "PRECA": {"name": "降水量", "unit": "mm"},
-    "VISIA": {"name": "能见度", "unit": "m"},
-    "UVRAA": {"name": "紫外线强度", "unit": "W/m²"},
-    "ACRAA": {"name": "辐射A", "unit": "W/m²"},
-    "LERAA": {"name": "长波辐射", "unit": "W/m²"},
-    "SDRAA": {"name": "散射辐射", "unit": "W/m²"},
-    "SGRAA": {"name": "总辐射", "unit": "W/m²"},
-    "STEMB": {"name": "土壤温度", "unit": "℃"},
+# 气象要素字段代码到名称和单位的映射
+# 作用：根据field_code（可能带后缀如WSPDD_hhmax）查找对应的中文名称和单位，用于构建给LLM的提示词
+
+METEO_UNIT_DICT = {
+    # 温度
+    "TEMPA": "℃",
+    
+    # 湿度
+    "HUMIA": "%",
+    
+    # 气压
+    "PRESA": "hPa",
+    
+    # 风
+    "WSPDA": "m/s",
+    "WSPDB": "m/s",
+    "WSPDC": "m/s",
+    "WSPDD": "m/s",
+    "WSPDE": "m/s",
+    
+    # 降水
+    "PRECA": "mm",
+    
+    # 日照
+    "SUNDA": "小时",
+    
+    # 蒸发
+    "EVAPB": "mm",
+    
+    # 辐射
+    "SGRAA": "W/m²",
+    "SDRAA": "W/m²",
+    "SSRAA": "W/m²",
+    "SRRAA": "W/m²",
+    "LSRAA": "W/m²",
+    "LERAA": "W/m²",
+    "UVRAD": "W/m²",
+    "UVRAA": "W/m²",
+    "UVRAB": "W/m²",
+    "ACRAA": "W/m²",
+    "NERAA": "W/m²",
+    
+    # 地温
+    "STEMA": "℃",
+    "STEMB": "℃",
+    "STEMC": "℃",
+    "STEMD": "℃",
+    "STEME": "℃",
+    "STEMF": "℃",
+    "STEMG": "℃",
+    "STEMH": "℃",
+    "STEMI": "℃",
+    "STEMJ": "℃",
+    
+    # 能见度
+    "VISIB": "m",
+    
+    # 冻土
+    "FROSA": "cm",
+}
+
+# 简单的名称映射（仅用于旧代码兼容）
+METEO_NAME_DICT = {
+    "TEMPA": "气温",
+    "HUMIA": "相对湿度",
+    "PRESA": "本站气压",
+    "WSPDA": "瞬时风速",
+    "WSPDB": "1分钟平均风速",
+    "WSPDC": "2分钟平均风速",
+    "WSPDD": "10分钟平均风速",
+    "WSPDE": "极大风速",
+    "PRECA": "降水量",
+    "SUNDA": "日照时数",
+    "EVAPB": "蒸发量",
+    "SGRAA": "总辐射",
+    "SDRAA": "直接辐射",
+    "SSRAA": "散射辐射",
+    "SRRAA": "反射辐射",
+    "LSRAA": "大气长波辐射",
+    "LERAA": "地面长波辐射",
+    "UVRAD": "紫外辐射",
+    "UVRAA": "紫外A辐射",
+    "UVRAB": "紫外B辐射",
+    "ACRAA": "光合有效辐射",
+    "NERAA": "净全辐射",
+    "STEMA": "草面温度",
+    "STEMB": "地面温度",
+    "STEMC": "5cm地温",
+    "STEMD": "10cm地温",
+    "STEME": "15cm地温",
+    "STEMF": "20cm地温",
+    "STEMG": "40cm地温",
+    "STEMH": "80cm地温",
+    "STEMI": "160cm地温",
+    "STEMJ": "320cm地温",
+    "VISIB": "能见度",
+    "FROSA": "冻土",
 }
 
 # 质控码说明
@@ -110,7 +193,7 @@ def parse_meteo_string(data_string: str) -> dict:
         value = parts[i + 1]
         qc = parts[i + 2]
         
-        if code in METEO_DICT and value != "/" and value != "":
+        if code in METEO_UNIT_DICT and value != "/" and value != "":
             try:
                 result["elements"][code] = {
                     "value": float(value),
@@ -359,17 +442,120 @@ USER_INPUT_MAP = {
 
 
 @register_function("get_meteo_data", GET_METEO_DATA_DESC, ToolType.SYSTEM_CTL)
-def get_meteo_data(conn, element: str, time_query: str = None):
+def get_meteo_data(conn, element: str = None, time_query: str = None):
     """
-    查询气象数据的主函数
+    查询气象数据的主函数（使用新的接口服务层）
+    
+    方案2：从conn.dialogue获取完整用户输入，由weather_field_mapper进行精确匹配
 
     Args:
         conn: 连接对象
-        element: 气象要素（温度、湿度等）
-        time_query: 时间查询表达式（可选）
+        element: 气象要素（已废弃，保留以兼容旧代码）
+        time_query: 时间查询表达式（已废弃，保留以兼容旧代码）
+    """
+    try:
+        # 导入新的服务层模块
+        from .weather_field_mapper import build_api_request_from_user_input
+        from .weather_grpc_client import call_weather_api
+        
+        # 从conn.dialogue获取最新用户输入
+        user_input = None
+        if hasattr(conn, 'dialogue') and conn.dialogue:
+            # 从后往前查找最新的用户消息
+            for msg in reversed(conn.dialogue.dialogue):
+                if msg.role == "user" and msg.content:
+                    user_input = msg.content
+                    break
+        
+        if not user_input:
+            logger.bind(tag=TAG).warning("无法从dialogue获取用户输入，尝试使用element参数")
+            # 如果无法获取用户输入，尝试使用element参数（向后兼容）
+            if element:
+                user_input = element
+                if time_query:
+                    user_input = f"{element} {time_query}"
+            else:
+                msg = "抱歉，无法获取您的查询内容，请重新提问"
+                return ActionResponse(Action.RESPONSE, msg, msg)
+        
+        logger.bind(tag=TAG).info(f"用户输入: {user_input}")
+        
+        # 使用完整用户输入构建接口请求参数
+        request = build_api_request_from_user_input(user_input, push_browser=False)
+        
+        if not request:
+            msg = f"抱歉，无法识别您的查询：{user_input}，请检查查询要素是否正确"
+            return ActionResponse(Action.RESPONSE, msg, msg)
+        
+        logger.bind(tag=TAG).info(f"构建请求参数: biz_type={request['biz_type']}, fields={request['params']['fields']}")
+        
+        # 调用接口（目前使用模拟数据，后续可切换为真实API）
+        api_response = call_weather_api(
+            biz_type=request["biz_type"],
+            params=request["params"],
+            req_id=request["req_id"],
+            push_browser=request.get("push_browser", False)
+        )
+        
+        # 处理接口响应 - 构建清晰的提示词给LLM
+        field_code = request["params"]["fields"][0]
+        
+        # 从API响应中提取数据值
+        data_value = None
+        if isinstance(api_response, dict):
+            data = api_response.get("data", {})
+            # data中可能直接包含field_code作为key，或者有其他格式
+            if field_code in data:
+                data_value = data[field_code]
+            else:
+                # 尝试提取第一个数值
+                for key, value in data.items():
+                    if key != "req_id" and value is not None:
+                        try:
+                            data_value = float(value)
+                            break
+                        except (ValueError, TypeError):
+                            pass
+        
+        # 根据field_code获取单位（提取基础代码）
+        base_field_code = field_code.split("_")[0] if "_" in field_code else field_code
+        element_unit = METEO_UNIT_DICT.get(base_field_code, "")
+        
+        if not element_unit:
+            logger.bind(tag=TAG).warning(f"未找到字段代码单位映射: {field_code} (基础代码: {base_field_code})")
+        
+        # 构建简洁的提示词：只包含必要信息
+        if data_value is not None:
+            prompt_text = f"用户向你提问：{user_input}。你已经知道答案为 {data_value} {element_unit}。请直接用答案中的数字回复用户的问题，严格按照用户的提问回复，不要回复以上信息中没有的数字，千万不要捏造数据，千万不要介绍概念和原理，回复要专业、简洁，不超过2句话。"
+        else:
+            prompt_text = f"用户向你提问：{user_input}。查询结果：未获取到有效数据。请直接告知用户未获取到数据，回复不超过2句话。"
+        
+        logger.bind(tag=TAG).debug(f"提示词: {prompt_text}")
+        
+        # 使用REQLLM让LLM生成回复
+        return ActionResponse(
+            Action.REQLLM,
+            result=prompt_text,
+            response=None
+        )
+    
+    except ImportError as e:
+        # 如果新模块导入失败，回退到旧逻辑
+        logger.bind(tag=TAG).warning(f"新服务层模块导入失败，使用旧逻辑: {e}")
+        return _get_meteo_data_legacy(conn, element, time_query)
+    except Exception as e:
+        logger.bind(tag=TAG).error(f"查询气象数据失败: {e}")
+        import traceback
+        logger.bind(tag=TAG).error(traceback.format_exc())
+        msg = f"查询气象数据时发生错误，请稍后重试"
+        return ActionResponse(Action.RESPONSE, msg, msg)
+
+
+def _get_meteo_data_legacy(conn, element: str, time_query: str = None):
+    """
+    旧版查询逻辑（作为备用）
     """
     # 将用户输入映射到要素代码
-    # 按关键词长度从长到短排序，优先匹配更具体的关键词
     element_code = None
     sorted_keys = sorted(USER_INPUT_MAP.keys(), key=len, reverse=True)
     for key in sorted_keys:
@@ -382,7 +568,11 @@ def get_meteo_data(conn, element: str, time_query: str = None):
         msg = "抱歉，不支持查询" + element + "，目前支持查询：温度、湿度、气压、风速、风向、降水量、能见度、紫外线"
         return ActionResponse(Action.RESPONSE, msg, msg)
 
-    elem_info = METEO_DICT[element_code]
+    # 获取要素信息（用于旧代码兼容）
+    elem_info = {
+        "name": METEO_NAME_DICT.get(element_code, element_code),
+        "unit": METEO_UNIT_DICT.get(element_code, "")
+    }
 
     # 如果有时间查询，解析时间
     if time_query:
@@ -417,7 +607,7 @@ def get_meteo_data(conn, element: str, time_query: str = None):
         data = get_latest_element(element_code)
 
         if not data:
-            elem_name = METEO_DICT[element_code]['name']
+            elem_name = METEO_NAME_DICT.get(element_code, element_code)
             msg = "暂无" + elem_name + "数据，请确认数据采集程序是否正常运行"
             return ActionResponse(Action.RESPONSE, msg, msg)
 

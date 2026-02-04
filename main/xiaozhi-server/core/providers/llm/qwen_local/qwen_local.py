@@ -221,21 +221,20 @@ class LLMProvider(LLMProviderBase):
             yield token, None
 
     def _quick_intent_match(self, text, functions):
-        """快速意图匹配，不调用LLM"""
+        """快速意图匹配，不调用LLM
+        
+        只负责判断是否包含气象关键词，如果包含就触发get_meteo_data函数。
+        具体的字段映射和时间提取由weather_field_mapper处理。
+        """
         import json
-        import re
 
-        # 气象数据查询关键词映射
-        meteo_keywords = {
-            "温度": "温度", "多少度": "温度", "气温": "温度", "冷不冷": "温度", "热不热": "温度",
-            "湿度": "湿度", "潮不潮": "湿度",
-            "气压": "气压", "大气压": "气压",
-            "风速": "风速", "风大不大": "风速", "刮风": "风速",
-            "风向": "风向",
-            "降水": "降水量", "下雨": "降水量", "雨量": "降水量",
-            "能见度": "能见度",
-            "紫外线": "紫外线",
-        }
+        # 气象数据查询关键词列表（用于快速意图识别，只要匹配到就触发get_meteo_data函数）
+        # 具体的字段映射由weather_field_mapper处理
+        meteo_keywords = [
+            "气压", "本站气压", "温度", "气温", "湿度", "风", "降水", "日照", "蒸发",
+            "辐射", "长波", "紫外", "地温", "地面温度", "草温", "草面温度", "雪面温度",
+            "能见度", "冻土"
+        ]
 
         # 检查是否有 get_meteo_data 函数
         has_meteo_func = any(
@@ -244,86 +243,13 @@ class LLMProvider(LLMProviderBase):
         )
 
         if has_meteo_func:
-            for keyword, element in meteo_keywords.items():
+            # 按长度从长到短排序，优先匹配更具体的关键词
+            for keyword in sorted(meteo_keywords, key=len, reverse=True):
                 if keyword in text:
-                    # 提取时间信息
-                    time_query = self._extract_time_query(text)
-
-                    arguments = {"element": element}
-                    if time_query:
-                        arguments["time_query"] = time_query
-
+                    # 只触发函数，不传element和time_query，让weather_field_mapper处理完整输入
                     return json.dumps({
                         "name": "get_meteo_data",
-                        "arguments": arguments
+                        "arguments": {}
                     }, ensure_ascii=False)
 
         return None
-
-    def _extract_time_query(self, text):
-        """
-        从文本中提取时间查询表达式
-
-        Returns:
-            时间查询字符串，如果没有时间信息则返回None
-        """
-        import re
-
-        # 时间关键词模式
-        time_patterns = [
-            # 相对时间
-            r'(现在|当前|目前)',
-            r'(今天|今日)',
-            r'(昨天|昨日)',
-            r'(前天)',
-            r'(\d+)\s*(小时前|个小时前)',
-            r'(\d+)\s*(天前)',
-            r'(上周|上星期)([一二三四五六日天])?',
-            r'(这周|本周|这星期|本星期)([一二三四五六日天])?',
-
-            # 具体时间
-            r'(\d+)\s*月\s*(\d+)\s*(号|日)',
-            r'(\d+)\s*点',
-            r'(早上|上午|中午|下午|晚上|凌晨)',
-
-            # 组合时间
-            r'(今天|昨天|前天)?\s*(早上|上午|中午|下午|晚上|凌晨)?\s*(\d+)\s*点',
-            r'(\d+)\s*月\s*(\d+)\s*(号|日)\s*(早上|上午|中午|下午|晚上|凌晨)?\s*(\d+)?\s*点?',
-        ]
-
-        # 尝试匹配所有时间模式
-        matched_parts = []
-        for pattern in time_patterns:
-            matches = re.findall(pattern, text)
-            if matches:
-                # 将匹配到的部分添加到列表
-                for match in matches:
-                    if isinstance(match, tuple):
-                        matched_parts.extend([m for m in match if m])
-                    else:
-                        matched_parts.append(match)
-
-        # 如果没有匹配到时间关键词，返回None
-        if not matched_parts:
-            return None
-
-        # 简单策略：返回原始文本（让dateparser去解析）
-        # 移除气象要素关键词，只保留时间部分
-        time_text = text
-        meteo_keywords = ["温度", "多少度", "气温", "冷不冷", "热不热",
-                         "湿度", "潮不潮", "气压", "大气压",
-                         "风速", "风大不大", "刮风", "风向",
-                         "降水", "下雨", "雨量", "能见度", "紫外线",
-                         "是多少", "多少", "怎么样", "如何"]
-
-        for keyword in meteo_keywords:
-            time_text = time_text.replace(keyword, "")
-
-        # 清理多余的标点和空格
-        time_text = re.sub(r'[？?！!，,。.的]', ' ', time_text).strip()
-
-        # 如果清理后为空，返回None
-        if not time_text or len(time_text) < 2:
-            return None
-
-        return time_text

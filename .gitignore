@@ -146,6 +146,11 @@ tmp
 .history
 .DS_Store
 main/xiaozhi-server/data
+# 数据库文件
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
 
 main/manager-web/node_modules
 .config.yaml
@@ -160,6 +165,19 @@ main/xiaozhi-server/models/SenseVoiceSmall/model.pt
 main/xiaozhi-server/models/sherpa-onnx*
 main/xiaozhi-server/models/.paddlespeech/
 main/xiaozhi-server/models/.paddlenlp/
+# 模型文件扩展名（排除所有模型文件）
+*.pt
+*.onnx
+*.safetensors
+*.bin
+*.pth
+*.ckpt
+*.h5
+*.pb
+*.tflite
+# 但保留 VAD 模型的代码文件
+!main/xiaozhi-server/models/snakers4_silero-vad/src/**/*.py
+!main/xiaozhi-server/models/snakers4_silero-vad/hubconf.py
 /main/xiaozhi-server/audio_ref/
 /audio_ref/
 /asr-models/iic/SenseVoiceSmall/
@@ -212,3 +230,21 @@ main/xiaozhi-server/scripts/keys/
 main/xiaozhi-server/scripts/licenses/
 *.lic
 .time_state
+
+# 构建产物和临时文件
+build_simulator/
+*.exe
+*.toc
+*.html
+*.spec
+dist/
+*.whl
+
+# 数据文件
+xiaozhi/data/
+tmp/
+*.pid
+
+# 其他敏感或大文件
+config_from_api.yaml
+mcp_server_settings.json

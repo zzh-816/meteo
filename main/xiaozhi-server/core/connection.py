@@ -751,10 +751,15 @@ class ConnectionHandler:
                 role="user",
                 content="[系统提示] 已达到最大工具调用次数限制，请你基于目前已经获取的所有信息，直接给出最终答案。不要再尝试调用任何工具。"
             ))
+        elif depth > 0:
+            # 当depth > 0时，说明是处理REQLLM的递归调用，此时应该禁用工具调用，强制LLM直接回答
+            # 这样可以避免在处理工具返回的提示词时再次触发工具调用
+            force_final_answer = True
+            self.logger.bind(tag=TAG).debug(f"递归调用(depth={depth})，禁用工具调用，强制LLM直接回答")
 
         # Define intent functions
         functions = None
-        # 达到最大深度时，禁用工具调用，强制 LLM 直接回答
+        # 达到最大深度或递归调用时，禁用工具调用，强制 LLM 直接回答
         if self.intent_type == "function_call" and hasattr(self, "func_handler") and not force_final_answer:
             functions = self.func_handler.get_functions()
         response_message = []
@@ -768,21 +773,26 @@ class ConnectionHandler:
                 )
                 memory_str = future.result()
 
+            # 获取最终传给LLM的dialogue
+            final_dialogue = self.dialogue.get_llm_dialogue_with_memory(
+                memory_str, self.config.get("voiceprint", {})
+            )
+            
+            # 当depth > 0时（处理REQLLM），打印最终传给LLM的完整提示词
+            if depth > 0:
+                self.logger.bind(tag=TAG).info(f"【最终传给LLM的完整提示词（depth={depth}）】:\n{json.dumps(final_dialogue, indent=2, ensure_ascii=False)}")
+            
             if self.intent_type == "function_call" and functions is not None:
                 # 使用支持functions的streaming接口
                 llm_responses = self.llm.response_with_functions(
                     self.session_id,
-                    self.dialogue.get_llm_dialogue_with_memory(
-                        memory_str, self.config.get("voiceprint", {})
-                    ),
+                    final_dialogue,
                     functions=functions,
                 )
             else:
                 llm_responses = self.llm.response(
                     self.session_id,
-                    self.dialogue.get_llm_dialogue_with_memory(
-                        memory_str, self.config.get("voiceprint", {})
-                    ),
+                    final_dialogue,
                 )
         except Exception as e:
             self.logger.bind(tag=TAG).error(f"LLM 处理出错 {query}: {e}")
@@ -951,9 +961,12 @@ class ConnectionHandler:
             ]
             self.dialogue.put(Message(role="assistant", tool_calls=all_tool_calls))
 
+            # 收集所有tool message的内容
+            tool_messages_content = []
             for result, tool_call_data in need_llm_tools:
                 text = result.result
                 if text is not None and len(text) > 0:
+                    tool_messages_content.append(text)
                     self.dialogue.put(
                         Message(
                             role="tool",
@@ -962,7 +975,74 @@ class ConnectionHandler:
                         )
                     )
 
-            self.chat(None, depth=depth + 1)
+            # 当处理REQLLM时，只传递tool message的内容，不传整个对话历史
+            # 注意：这里无论depth是多少，只要是REQLLM，都应该只传tool message的内容
+            if tool_messages_content:
+                # 将所有tool message的内容合并，作为唯一的user message传给LLM
+                combined_tool_content = "\n\n".join(tool_messages_content)
+                self.logger.bind(tag=TAG).info(f"【最终传给LLM的提示词（depth={depth+1}）】: {combined_tool_content}")
+                
+                # 构建简化的dialogue列表，只包含tool message的内容作为user message
+                # 不包含system message，不包含对话历史，只包含tool message的内容
+                simplified_dialogue_list = [{"role": "user", "content": combined_tool_content}]
+                
+                # 直接调用LLM，不通过chat方法，避免再次获取dialogue
+                try:
+                    llm_responses = self.llm.response(
+                        self.session_id,
+                        simplified_dialogue_list,
+                    )
+                    
+                    # 处理流式响应
+                    response_message = []
+                    content_arguments = ""
+                    self.client_abort = False
+                    emotion_flag = True
+                    
+                    for response in llm_responses:
+                        if self.client_abort:
+                            break
+                        
+                        content = response
+                        
+                        # 在llm回复中获取情绪表情，一轮对话只在开头获取一次
+                        if emotion_flag and content is not None and content.strip():
+                            asyncio.run_coroutine_threadsafe(
+                                textUtils.get_emotion(self, content),
+                                self.loop,
+                            )
+                            emotion_flag = False
+                        
+                        if content is not None and len(content) > 0:
+                            response_message.append(content)
+                            self.tts.tts_text_queue.put(
+                                TTSMessageDTO(
+                                    sentence_id=self.sentence_id,
+                                    sentence_type=SentenceType.MIDDLE,
+                                    content_type=ContentType.TEXT,
+                                    content_detail=content,
+                                )
+                            )
+                            content_arguments += content
+                    
+                    # 保存assistant回复到dialogue
+                    if content_arguments:
+                        self.dialogue.put(Message(role="assistant", content=content_arguments))
+                        # 流式处理时已经将内容放入TTS队列，这里不需要再发送
+                        # 只需要发送LAST消息标记结束
+                        if depth == 0:
+                            self.tts.tts_text_queue.put(
+                                TTSMessageDTO(
+                                    sentence_id=self.sentence_id,
+                                    sentence_type=SentenceType.LAST,
+                                    content_type=ContentType.ACTION,
+                                )
+                            )
+                except Exception as e:
+                    self.logger.bind(tag=TAG).error(f"处理REQLLM时出错: {e}")
+                    import traceback
+                    self.logger.bind(tag=TAG).error(traceback.format_exc())
+                return
 
     def _report_worker(self):
         """聊天记录上报工作线程"""
