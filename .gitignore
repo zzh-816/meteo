@@ -175,9 +175,11 @@ main/xiaozhi-server/models/.paddlenlp/
 *.h5
 *.pb
 *.tflite
-# 但保留 VAD 模型的代码文件
+# 但保留 VAD 模型的代码文件和模型文件
 !main/xiaozhi-server/models/snakers4_silero-vad/src/**/*.py
 !main/xiaozhi-server/models/snakers4_silero-vad/hubconf.py
+!main/xiaozhi-server/models/snakers4_silero-vad/**/*.onnx
+!main/xiaozhi-server/models/snakers4_silero-vad/**/*.jit
 /main/xiaozhi-server/audio_ref/
 /audio_ref/
 /asr-models/iic/SenseVoiceSmall/
