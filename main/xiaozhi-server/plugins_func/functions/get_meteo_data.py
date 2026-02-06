@@ -497,7 +497,7 @@ def get_meteo_data(conn, element: str = None, time_query: str = None):
             push_browser=request.get("push_browser", False)
         )
         
-        # 处理接口响应 - 构建清晰的提示词给LLM
+        # 处理接口响应 - 直接使用模板回复，不再调用LLM
         field_code = request["params"]["fields"][0]
         
         # 从API响应中提取数据值
@@ -524,20 +524,25 @@ def get_meteo_data(conn, element: str = None, time_query: str = None):
         if not element_unit:
             logger.bind(tag=TAG).warning(f"未找到字段代码单位映射: {field_code} (基础代码: {base_field_code})")
         
-        # 构建简洁的提示词：只包含必要信息
+        # 直接使用模板回复，不再调用LLM
         if data_value is not None:
-            prompt_text = f"用户向你提问：{user_input}。你已经知道答案为 {data_value} {element_unit}。请直接用答案中的数字回复用户的问题，严格按照用户的提问回复，不要回复以上信息中没有的数字，千万不要捏造数据，千万不要介绍概念和原理，回复要专业、简洁，不超过2句话。"
+            # 使用模板回复格式
+            response_text = f"为您查询到的数据为{data_value} {element_unit}"
+            logger.bind(tag=TAG).info(f"使用模板回复: {response_text}")
+            return ActionResponse(
+                Action.RESPONSE,
+                result=response_text,
+                response=response_text
+            )
         else:
-            prompt_text = f"用户向你提问：{user_input}。查询结果：未获取到有效数据。请直接告知用户未获取到数据，回复不超过2句话。"
-        
-        logger.bind(tag=TAG).debug(f"提示词: {prompt_text}")
-        
-        # 使用REQLLM让LLM生成回复
-        return ActionResponse(
-            Action.REQLLM,
-            result=prompt_text,
-            response=None
-        )
+            # 未获取到数据的情况
+            response_text = "抱歉，未获取到有效数据"
+            logger.bind(tag=TAG).warning("未获取到有效数据")
+            return ActionResponse(
+                Action.RESPONSE,
+                result=response_text,
+                response=response_text
+            )
     
     except ImportError as e:
         # 如果新模块导入失败，回退到旧逻辑
