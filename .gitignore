@@ -165,6 +165,9 @@ main/xiaozhi-server/models/SenseVoiceSmall/model.pt
 main/xiaozhi-server/models/sherpa-onnx*
 main/xiaozhi-server/models/.paddlespeech/
 main/xiaozhi-server/models/.paddlenlp/
+# SeACo-Paraformer 模型目录（约1GB，不上传）
+main/xiaozhi-server/models/SeACo-Paraformer/
+**/SeACo-Paraformer/
 # 模型文件扩展名（排除所有模型文件）
 *.pt
 *.onnx
