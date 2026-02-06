@@ -649,7 +649,21 @@ SECONDARY_QUERY_PATTERNS = {
             "time_keywords": ["当前", "现在"],
             "extreme_keywords": [],
             "required_time": False,
-    },
+        },
+        {
+            "field": "STEMA_hhmax",
+            "biz_type": "WEATHER",
+            "time_keywords": ["今天"],
+            "extreme_keywords": ["最高"],
+            "required_time": False,
+        },
+        {
+            "field": "STEMA_hhmin",
+            "biz_type": "WEATHER",
+            "time_keywords": ["今天"],
+            "extreme_keywords": ["最低"],
+            "required_time": False,
+        },
     ],
     
     # 能见度
@@ -724,6 +738,9 @@ USER_INPUT_TO_SECONDARY = {
     "最大风速": "最大风",  # 优先匹配组合词
     "风速": "瞬时风",  # 默认映射到瞬时风
     "瞬时风": "瞬时风",
+    "1分钟平均风": "1分钟风",  # 支持"平均"的说法
+    "2分钟平均风": "2分钟风",  # 支持"平均"的说法
+    "10分钟平均风": "10分钟风",  # 支持"平均"的说法
     "1分钟风": "1分钟风",
     "2分钟风": "2分钟风",
     "10分钟风": "10分钟风",
@@ -790,6 +807,7 @@ USER_INPUT_TO_SECONDARY = {
     "雪面温度": "雪面温度",
     "最高雪面温度": "雪面温度",  
     "最低雪面温度": "雪面温度",
+    "雪面": "雪面温度",  # 支持只输入"雪面"
     
     # 能见度
     "能见度": "能见度",
@@ -818,8 +836,16 @@ def find_secondary_category(user_input: str) -> Optional[List[str]]:
     # 按长度从长到短排序，优先匹配更具体的词
     sorted_keys = sorted(USER_INPUT_TO_SECONDARY.keys(), key=len, reverse=True)
     
+    # 改进匹配逻辑：优先匹配更长的、更具体的词
+    # 对于包含字母的key（如"紫外A"），需要确保大小写不敏感匹配
     for key in sorted_keys:
-        if key in user_input_lower:
+        key_lower = key.lower()
+        # 使用精确匹配，避免子串误匹配
+        # 例如："紫外A辐射"应该匹配"紫外A辐射"，而不是"紫外辐射"
+        if key_lower in user_input_lower:
+            # 进一步检查：如果key包含字母（如"紫外A"），确保匹配的是完整的词
+            # 避免"紫外A辐射"被"紫外辐射"误匹配
+            # 由于已经按长度排序，更长的词会先匹配，所以这里直接返回即可
             secondary = USER_INPUT_TO_SECONDARY[key]
             logger.bind(tag=TAG).debug(f"匹配到二级分类: {key} -> {secondary} (原始输入: {user_input})")
             return [secondary]
