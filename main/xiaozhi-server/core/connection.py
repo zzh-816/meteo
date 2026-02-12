@@ -160,6 +160,15 @@ class ConnectionHandler:
         # 初始化提示词管理器
         self.prompt_manager = PromptManager(config, self.logger)
 
+        # ========== 唤醒词功能 ==========
+        # 初始化唤醒词检测器
+        wakeup_config = self.config.get("wakeup_word", {})
+        from core.utils.wakeup_word_detector import WakeupWordDetector
+        self.wakeup_detector = WakeupWordDetector(wakeup_config)
+        
+        # 唤醒状态（每个连接独立管理）
+        self.is_awakened = False  # 当前是否处于唤醒状态
+
     async def handle_connection(self, ws):
         try:
             # 获取并验证headers
@@ -591,6 +600,11 @@ class ConnectionHandler:
         # 获取声纹信息
         if private_config.get("voiceprint", None) is not None:
             self.config["voiceprint"] = private_config["voiceprint"]
+        # 获取唤醒词配置
+        if private_config.get("wakeup_word", None) is not None:
+            self.config["wakeup_word"] = private_config["wakeup_word"]
+            # 更新唤醒词检测器配置
+            self.wakeup_detector.update_config(private_config["wakeup_word"])
         if private_config.get("summaryMemory", None) is not None:
             self.config["summaryMemory"] = private_config["summaryMemory"]
         if private_config.get("device_max_output_size", None) is not None:

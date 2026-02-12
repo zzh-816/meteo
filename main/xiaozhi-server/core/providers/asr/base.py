@@ -17,6 +17,7 @@ from core.handle.receiveAudioHandle import startToChat
 from core.handle.reportHandle import enqueue_asr_report
 from core.utils.util import remove_punctuation_and_length
 from core.handle.receiveAudioHandle import handleAudioMessage
+from core.handle.sendAudioHandle import send_stt_message
 
 TAG = __name__
 logger = setup_logging()
@@ -165,12 +166,68 @@ class ASRProviderBase(ABC):
             self.stop_ws_connection()
             
             if text_len > 0:
-                # 构建包含说话人信息的JSON字符串
-                enhanced_text = self._build_enhanced_text(raw_text, speaker_name)
+                # ========== 唤醒词检测逻辑 ==========
+                if not conn.is_awakened:
+                    # ========== 未唤醒状态 ==========
+                    # 检查是否包含唤醒词
+                    wakeup_detected, matched_word = conn.wakeup_detector.check_wakeup_word(raw_text)
+                    
+                    if wakeup_detected:
+                        # 检测到唤醒词，激活唤醒状态
+                        conn.is_awakened = True
+                        conn.logger.bind(tag=TAG).info(f"检测到唤醒词: {matched_word}，已激活唤醒状态")
+                        
+                        # 获取固定的问候语文本
+                        greeting_text = conn.wakeup_detector.get_greeting_message()
+                        conn.logger.bind(tag=TAG).info(f"唤醒后发送固定问候语: {greeting_text}")
+                        
+                        # 构建包含说话人信息的JSON字符串（用于上报）
+                        enhanced_text = self._build_enhanced_text(raw_text, speaker_name)
+                        
+                        # 直接发送固定的问候语给TTS，不经过LLM
+                        # 构造TTS消息
+                        from core.providers.tts.dto.dto import TTSMessageDTO, SentenceType, ContentType
+                        import uuid
+                        conn.sentence_id = str(uuid.uuid4().hex)
+                        
+                        # 发送STT消息（显示用户说的唤醒词）
+                        await send_stt_message(conn, raw_text)
+                        
+                        # 发送固定的问候语给TTS
+                        conn.tts.tts_text_queue.put(
+                            TTSMessageDTO(
+                                sentence_id=conn.sentence_id,
+                                sentence_type=SentenceType.FIRST,
+                                content_type=ContentType.TEXT,
+                                content_detail=greeting_text,
+                            )
+                        )
+                        conn.tts.tts_text_queue.put(
+                            TTSMessageDTO(
+                                sentence_id=conn.sentence_id,
+                                sentence_type=SentenceType.LAST,
+                                content_type=ContentType.ACTION,
+                            )
+                        )
+                        
+                        # 上报识别结果
+                        enqueue_asr_report(conn, enhanced_text, asr_audio_task)
+                    else:
+                        # 未检测到唤醒词，忽略此次识别结果
+                        conn.logger.bind(tag=TAG).debug(f"未唤醒状态，忽略识别结果: {raw_text}")
+                        return  # 不进入对话流程
                 
-                # 使用自定义模块进行上报
-                await startToChat(conn, enhanced_text)
-                enqueue_asr_report(conn, enhanced_text, asr_audio_task)
+                else:
+                    # ========== 已唤醒状态 ==========
+                    # 连接存在就保持唤醒状态，不需要检查超时
+                    # 正常对话，不过滤唤醒词（用户可能就是想说"你好xx"）
+                    
+                    # 构建包含说话人信息的JSON字符串
+                    enhanced_text = self._build_enhanced_text(raw_text, speaker_name)
+                    
+                    # 正常进入对话流程
+                    await startToChat(conn, enhanced_text)
+                    enqueue_asr_report(conn, enhanced_text, asr_audio_task)
                 
         except Exception as e:
             logger.bind(tag=TAG).error(f"处理语音停止失败: {e}")

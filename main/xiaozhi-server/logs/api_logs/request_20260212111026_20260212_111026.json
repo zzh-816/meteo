@@ -1,0 +1,11 @@
+{
+  "biz_type": "WEATHER",
+  "req_id": "20260212111026",
+  "params": {
+    "fields": [
+      "WSPDE_hhmax"
+    ],
+    "date": "2026-02-12"
+  },
+  "push_browser": false
+}
