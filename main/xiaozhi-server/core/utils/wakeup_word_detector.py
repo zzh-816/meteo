@@ -99,12 +99,12 @@ class WakeupWordDetector:
     
     def get_greeting_message(self) -> str:
         """
-        获取唤醒后的问候语
+        获取唤醒后的问候语（仅语音唤醒时使用）
         
         Returns:
-            问候语，格式为"您好，我是xx"
+            固定问候语："您好，请问有什么可以帮助您的？"
         """
-        return f"您好，我是{self.ai_name}"
+        return "您好，请问有什么可以帮助您的？"
     
     def update_config(self, config: dict):
         """

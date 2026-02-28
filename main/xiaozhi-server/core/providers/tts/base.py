@@ -83,14 +83,19 @@ class TTSProviderBase(ABC):
         self.before_stop_play_files.append((file_audio, text))
 
     def to_tts_stream(self, text, opus_handler: Callable[[bytes], None] = None) -> None:
+        import time
+        start_time = time.time()
         text = MarkdownCleaner.clean_markdown(text)
+        logger.bind(tag=TAG).info(f"开始处理TTS文本: {text[:50]}...")
         max_repeat_time = 5
         if self.delete_audio_file:
             # 需要删除文件的直接转为音频数据
             while max_repeat_time > 0:
                 try:
+                    logger.bind(tag=TAG).debug(f"尝试生成语音（剩余重试次数: {max_repeat_time}）")
                     audio_bytes = asyncio.run(self.text_to_speak(text, None))
                     if audio_bytes:
+                        logger.bind(tag=TAG).info(f"语音生成成功，开始转换为数据流...")
                         self.tts_audio_queue.put((SentenceType.FIRST, None, text))
                         audio_bytes_to_data_stream(
                             audio_bytes,
@@ -98,21 +103,27 @@ class TTSProviderBase(ABC):
                             is_opus=True,
                             callback=opus_handler,
                         )
+                        total_time = time.time() - start_time
+                        logger.bind(tag=TAG).info(f"TTS处理完成，总耗时: {total_time:.2f} 秒")
                         break
                     else:
+                        logger.bind(tag=TAG).warning(f"语音生成返回空数据，重试中...")
                         max_repeat_time -= 1
                 except Exception as e:
                     logger.bind(tag=TAG).warning(
-                        f"语音生成失败{5 - max_repeat_time + 1}次: {text}，错误: {e}"
+                        f"语音生成失败{5 - max_repeat_time + 1}次: {text[:50]}...，错误: {e}，类型: {type(e).__name__}"
                     )
+                    import traceback
+                    logger.bind(tag=TAG).debug(f"详细错误堆栈: {traceback.format_exc()}")
                     max_repeat_time -= 1
             if max_repeat_time > 0:
                 logger.bind(tag=TAG).info(
-                    f"语音生成成功: {text}，重试{5 - max_repeat_time}次"
+                    f"语音生成成功: {text[:50]}...，重试{5 - max_repeat_time}次"
                 )
             else:
+                total_time = time.time() - start_time
                 logger.bind(tag=TAG).error(
-                    f"语音生成失败: {text}，请检查网络或服务是否正常"
+                    f"语音生成失败（耗时 {total_time:.2f} 秒）: {text[:50]}...，请检查网络或服务是否正常"
                 )
             return None
         else:
@@ -283,10 +294,14 @@ class TTSProviderBase(ABC):
                     self.is_first_sentence = True
                     self.tts_audio_first_sentence = True
                 elif ContentType.TEXT == message.content_type:
+                    logger.bind(tag=TAG).debug(f"收到TTS文本消息: {message.content_detail[:50]}...")
                     self.tts_text_buff.append(message.content_detail)
                     segment_text = self._get_segment_text()
                     if segment_text:
+                        logger.bind(tag=TAG).info(f"提取到分段文本，开始合成: {segment_text[:50]}...")
                         self.to_tts_stream(segment_text, opus_handler=self.handle_opus)
+                    else:
+                        logger.bind(tag=TAG).debug(f"暂未提取到完整分段，等待更多文本。当前缓冲区: {''.join(self.tts_text_buff)[:100]}...")
                 elif ContentType.FILE == message.content_type:
                     self._process_remaining_text_stream(opus_handler=self.handle_opus)
                     tts_file = message.content_file
@@ -295,10 +310,12 @@ class TTSProviderBase(ABC):
                             tts_file, callback=self.handle_opus
                         )
                 if message.sentence_type == SentenceType.LAST:
+                    logger.bind(tag=TAG).info("收到LAST消息，处理剩余文本")
                     self._process_remaining_text_stream(opus_handler=self.handle_opus)
                     self.tts_audio_queue.put(
                         (message.sentence_type, [], message.content_detail)
                     )
+                    logger.bind(tag=TAG).info("LAST消息处理完成")
 
             except queue.Empty:
                 continue

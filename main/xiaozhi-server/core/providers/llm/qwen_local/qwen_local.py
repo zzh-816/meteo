@@ -75,8 +75,14 @@ class LLMProvider(LLMProviderBase):
                 "attn_implementation": self.attn_implementation,
             }
             
+            # 显式指定 device_map 以避免 transformers 内部调用 torch.get_default_device()
+            # 这对于旧版本 PyTorch（<2.1.0）很重要，因为它们不支持 get_default_device
             if self.device == "cuda":
                 model_kwargs["device_map"] = "auto"
+            else:
+                # 对于 CPU，显式指定 device_map="cpu" 以避免 transformers 尝试获取默认设备
+                model_kwargs["device_map"] = "cpu"
+                model_kwargs["low_cpu_mem_usage"] = True
             
             if self.load_in_8bit:
                 model_kwargs["load_in_8bit"] = True
@@ -95,9 +101,6 @@ class LLMProvider(LLMProviderBase):
                 self.model_path,
                 **model_kwargs
             )
-            
-            if self.device == "cpu":
-                self.model = self.model.to(self.device)
             
             self.model.eval()
             

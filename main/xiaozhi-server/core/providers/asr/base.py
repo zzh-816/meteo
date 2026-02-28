@@ -185,7 +185,7 @@ class ASRProviderBase(ABC):
                         enhanced_text = self._build_enhanced_text(raw_text, speaker_name)
                         
                         # 直接发送固定的问候语给TTS，不经过LLM
-                        # 构造TTS消息
+                        # 与 chat() 一致：先 FIRST(ACTION)，再 MIDDLE(TEXT)，再 LAST(ACTION)，TTS 才会合成并播放
                         from core.providers.tts.dto.dto import TTSMessageDTO, SentenceType, ContentType
                         import uuid
                         conn.sentence_id = str(uuid.uuid4().hex)
@@ -193,11 +193,18 @@ class ASRProviderBase(ABC):
                         # 发送STT消息（显示用户说的唤醒词）
                         await send_stt_message(conn, raw_text)
                         
-                        # 发送固定的问候语给TTS
+                        # 先发 FIRST(ACTION)，再发 MIDDLE(TEXT) 问候语，再发 LAST(ACTION)
                         conn.tts.tts_text_queue.put(
                             TTSMessageDTO(
                                 sentence_id=conn.sentence_id,
                                 sentence_type=SentenceType.FIRST,
+                                content_type=ContentType.ACTION,
+                            )
+                        )
+                        conn.tts.tts_text_queue.put(
+                            TTSMessageDTO(
+                                sentence_id=conn.sentence_id,
+                                sentence_type=SentenceType.MIDDLE,
                                 content_type=ContentType.TEXT,
                                 content_detail=greeting_text,
                             )
